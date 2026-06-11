@@ -1,0 +1,25 @@
+# Node
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.local
+
+# Backend
+backend/node_modules/
+backend/dist/
+
+# Frontend
+web/node_modules/
+web/dist/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store
+Thumbs.db
