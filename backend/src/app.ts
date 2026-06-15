@@ -1,21 +1,17 @@
 import cors from 'cors';
+import { clerkMiddleware } from '@clerk/express';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { ZodError } from 'zod';
-import { env } from './config/env.js';
+import { env, corsOrigins } from './config/env.js';
 import { analyticsRouter } from './modules/analytics/analytics.routes.js';
 import { authRouter } from './modules/auth/auth.routes.js';
 import { smsRouter } from './modules/sms/sms.routes.js';
 import { transactionsRouter } from './modules/transactions/transactions.routes.js';
 
 export const app = express();
-const allowedOrigins = new Set(
-  (env.CORS_ORIGINS ?? env.CORS_ORIGIN)
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean)
-);
+const allowedOrigins = new Set(corsOrigins);
 
 app.use(helmet());
 app.use(
@@ -28,6 +24,12 @@ app.use(
   })
 );
 app.use(express.json({ limit: '1mb' }));
+app.use(
+  clerkMiddleware({
+    secretKey: env.CLERK_SECRET_KEY,
+    authorizedParties: [...allowedOrigins]
+  })
+);
 app.use(rateLimit({ windowMs: 60_000, limit: 120 }));
 
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'SmartExpense AI API' }));

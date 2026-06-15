@@ -28,42 +28,56 @@ export type Analytics = {
 
 export type ChartPoint = { label: string; value: number };
 
-let accessToken = localStorage.getItem('accessToken') ?? '';
-let refreshToken = localStorage.getItem('refreshToken') ?? '';
-
-export function getSession() {
-  return { accessToken, refreshToken };
-}
-
-export async function signup(name: string, email: string, password: string) {
-  const data = await request('/auth/signup', { method: 'POST', body: { name, email, password }, auth: false });
-  persistTokens(data.accessToken, data.refreshToken);
-  return data;
-}
-
-export async function login(email: string, password: string) {
-  const data = await request('/auth/login', { method: 'POST', body: { email, password }, auth: false });
-  persistTokens(data.accessToken, data.refreshToken);
-  return data;
-}
-
-export function signOut() {
-  accessToken = '';
-  refreshToken = '';
-  localStorage.removeItem('accessToken');
-  localStorage.removeItem('refreshToken');
-}
-
-export const api = {
-  analytics: () => request('/analytics'),
-  transactions: () => request('/transactions'),
-  createTransaction: (body: Partial<Transaction>) => request('/transactions', { method: 'POST', body }),
-  importSms: (text: string) => request('/sms/import', { method: 'POST', body: { text, receivedAt: new Date().toISOString() } })
+export type AuthUser = {
+  id: string;
+  clerkId: string;
+  email: string;
+  name: string;
 };
 
-async function request(path: string, options: { method?: string; body?: unknown; auth?: boolean } = {}) {
+export type TokenGetter = () => Promise<string | null>;
+
+let tokenGetter: TokenGetter | null = null;
+
+export class ApiError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+  }
+}
+
+export function setAuthTokenGetter(getter: TokenGetter | null) {
+  tokenGetter = getter;
+}
+
+export async function fetchCurrentUser(getToken: TokenGetter) {
+  return request('/auth/me', { getToken }) as Promise<{ user: AuthUser }>;
+}
+
+export function createApi(getToken: TokenGetter) {
+  return {
+    analytics: () => request('/analytics', { getToken }),
+    transactions: () => request('/transactions', { getToken }),
+    createTransaction: (body: Partial<Transaction>) => request('/transactions', { method: 'POST', body, getToken }),
+    importSms: (text: string) =>
+      request('/sms/import', {
+        method: 'POST',
+        body: { text, receivedAt: new Date().toISOString() },
+        getToken
+      })
+  };
+}
+
+async function request(
+  path: string,
+  options: { method?: string; body?: unknown; getToken?: TokenGetter } = {}
+) {
   const headers: HeadersInit = { 'content-type': 'application/json' };
-  if (options.auth !== false && accessToken) headers.authorization = `Bearer ${accessToken}`;
+  const getter = options.getToken ?? tokenGetter;
+
+  if (getter) {
+    const token = await getter();
+    if (token) headers.authorization = `Bearer ${token}`;
+  }
 
   let response: Response;
   try {
@@ -73,21 +87,33 @@ async function request(path: string, options: { method?: string; body?: unknown;
       body: options.body ? JSON.stringify(options.body) : undefined
     });
   } catch {
-    throw new Error('Cannot reach the API. Check that Docker is running and the API is available on port 4000.');
+    throw new Error('Cannot reach the API. Start the backend on port 4000 (docker compose up api).');
   }
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: response.statusText }));
-    throw new Error(error.message ?? 'Request failed');
+    throw new ApiError(formatApiError(error, response.status), response.status);
   }
 
   if (response.status === 204) return null;
   return response.json();
 }
 
-function persistTokens(nextAccessToken: string, nextRefreshToken: string) {
-  accessToken = nextAccessToken;
-  refreshToken = nextRefreshToken;
-  localStorage.setItem('accessToken', accessToken);
-  localStorage.setItem('refreshToken', refreshToken);
+function formatApiError(error: { message?: string; issues?: { path: (string | number)[]; message: string }[] }, status: number) {
+  if (error.issues?.length) {
+    const first = error.issues[0];
+    const field = first.path.join('.') || 'input';
+    return `${field}: ${first.message}`;
+  }
+  if (error.message) return error.message;
+  if (status === 401) return 'Session expired or API rejected Clerk token. Try signing in again.';
+  return 'Request failed';
 }
+
+// Back-compat for any legacy imports
+export const api = {
+  analytics: () => request('/analytics'),
+  transactions: () => request('/transactions'),
+  createTransaction: (body: Partial<Transaction>) => request('/transactions', { method: 'POST', body }),
+  importSms: (text: string) => request('/sms/import', { method: 'POST', body: { text, receivedAt: new Date().toISOString() } })
+};

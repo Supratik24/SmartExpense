@@ -1,8 +1,13 @@
+import { getAuth } from '@clerk/express';
 import type { NextFunction, Request, Response } from 'express';
-import jwt from 'jsonwebtoken';
-import { env } from '../config/env.js';
+import { ensureDbUser } from '../modules/auth/users.service.js';
 
-export type AuthUser = { id: string; email: string };
+export type AuthUser = {
+  id: string;
+  clerkId: string;
+  email: string;
+  name: string;
+};
 
 declare global {
   namespace Express {
@@ -12,18 +17,22 @@ declare global {
   }
 }
 
-export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const header = req.header('authorization');
-  const token = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
-
-  if (!token) {
-    return res.status(401).json({ message: 'Missing access token' });
-  }
-
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   try {
-    req.user = jwt.verify(token, env.JWT_ACCESS_SECRET) as AuthUser;
+    const { userId } = getAuth(req);
+    if (!userId) {
+      return res.status(401).json({ message: 'Missing or invalid Clerk session' });
+    }
+
+    const dbUser = await ensureDbUser(userId);
+    req.user = {
+      id: dbUser.id,
+      clerkId: userId,
+      email: dbUser.email,
+      name: dbUser.name
+    };
     return next();
-  } catch {
-    return res.status(401).json({ message: 'Invalid or expired access token' });
+  } catch (error) {
+    return next(error);
   }
 }
